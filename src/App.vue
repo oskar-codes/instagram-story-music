@@ -78,8 +78,15 @@
   </main>
 
   <div class="overlay" v-if="loading">
+    <h4 style="color: white;" v-if="recording">RECORDING... PLEASE STAY ON THIS TAB.</h4>
     <a-spin size="large" />
   </div>
+
+  <a-modal v-model:visible="alert" title="Before you continue" @ok="confirmStart">
+    <p>When pressing 'OK', the selected song will start playing in your browser, and permission to record your screen will be demanded. Please accept, and make sure to enable audio recording.</p>
+    <p>After the selected time, the recording will stop and your story will be generated. But while the recording is going, please stay on this page.</p>
+    <p>Ready to go?</p>
+  </a-modal>
 
 </template>
 
@@ -104,11 +111,13 @@ main h1 {
   width: 100%;
   height: 100%;
   display: flex;
+  flex-direction: column;
   justify-content: center;
   align-items: center;
   font-size: 60px;
   background: rgba(0,0,0,0.5);
   z-index: 1001;
+  text-align: center;
 }
 .track-container {
   max-height: 450px;
@@ -162,6 +171,8 @@ main h1 {
 <script>
 import { PlusOutlined, SearchOutlined, LoadingOutlined } from '@ant-design/icons-vue';
 import { message } from 'ant-design-vue';
+import convertVideoToAudio from './video-to-audio.js';
+
 const redirect = 'http://localhost:3000/';
 
 export default {
@@ -176,13 +187,15 @@ export default {
       spotifySearch: '',
       isSearch: false,
       spotifyTracks: [],
+      recording: false,
       settings: {
         start: 0,
         length: 15
       },
       loadingTracks: false,
       loading: false,
-      selectedTrack: null
+      selectedTrack: null,
+      alert: false
     }
   },
   watch: {
@@ -190,6 +203,9 @@ export default {
       if (!newVal) { // DISPLAY RECENTLY PLAYED
         this.loadRecentlyPlayed();
       }
+    },
+    recording(newVal) {
+      this.loading = newVal;
     }
   },
   methods: {
@@ -226,8 +242,8 @@ export default {
         if (!this.settings.length || this.settings.length < 5 || this.settings.length > 15) return message.error('Invalid length');
         if (this.settings.start + this.settings.length > this.selectedTrack.duration_ms / 1000) return message.error('Invalid start');
 
-        this.step++;
-        this.createStory();
+        this.alert = true;
+
         return;
       }
     },
@@ -259,8 +275,13 @@ export default {
       this.spotifyTracks = (await data.json()).items.map(e => e.track);
       this.loadingTracks = false;
     },
+    confirmStart() {
+      this.alert = false;
+      this.step++;
+      this.createStory();
+    },
     async createStory() {
-      
+      this.createStoryClientSide();
     },
     async createStoryClientSide() {
       const track = this.selectedTrack;
@@ -281,21 +302,21 @@ export default {
         chunks.push(data);
       });
 
-      recorder.addEventListener('stop', function(){
+      recorder.addEventListener('stop', async function() {
+        console.log(chunks[0].type);
         const blob = new Blob(chunks, {
           type: chunks[0].type
         });
         const url = URL.createObjectURL(blob);
+        console.log('[VIDEO]', url);
 
-        console.log(url);
+        const output = await convertVideoToAudio(new File([blob], 'video'), 'mp3');
+        console.log('[AUDIO]', output.data);
 
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = 'video.webm';
-        a.click();
+        
       });
 
-      recorder.start();
+
 
       await fetch(`https://api.spotify.com/v1/me/player/play?device_id=${this.device_id}`, {
         method: 'PUT',
@@ -308,6 +329,9 @@ export default {
           'Authorization': `Bearer ${this.token}`
         },
       });
+
+      this.recording = true;
+      recorder.start();
 
       await this.delay(length * 1000);
 
@@ -324,12 +348,15 @@ export default {
           'Authorization': `Bearer ${this.token}`
         },
       });
+
+      this.recording = false;
     },
     delay(ms = 0) {
       return new Promise(resolve => setTimeout(resolve, ms));
     }
   },
   async mounted() {
+
     window.onSpotifyWebPlaybackSDKReady = async _ => {
       // const token = (location.hash.match(/(?<=#access_token=).+?(?=&)/) ?? [])[0];
       // const urlState = (location.hash.match(/(?<=state=).+?(?=&|$)/) ?? [])[0];
